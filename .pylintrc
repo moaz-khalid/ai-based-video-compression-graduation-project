@@ -1,0 +1,28 @@
+# .pylintrc
+[MASTER]
+ignore=__init__.py
+
+[MESSAGES CONTROL]
+disable=
+    C0111,  # missing-docstring
+    C0103,  # invalid-name
+    E1101,  # no-member
+    E1102,  # not-callable
+    E0401,  # import-error
+    E0611,  # no-name-in-module
+    W0611,  # unused-import
+    R0903,  # too-few-public-methods
+    R0913,  # too-many-arguments
+    R0914,  # too-many-locals
+    R0915,  # too-many-statements
+
+[TYPECHECK]
+generated-members=
+    torch.*,
+    torch.nn.*,
+    torch.nn.functional.*,
+    torchvision.*,
+    PIL.*,
+    PIL.Image.*,
+    numpy.*,
+    skimage.*

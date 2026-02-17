@@ -1,0 +1,82 @@
+{
+  "total_bytes": 21865,
+  "original_bytes": 8189,
+  "frames": [
+    {
+      "name": "frame_000.png",
+      "original": 370,
+      "compressed": 2187,
+      "ratio": 0.16918152720621857
+    },
+    {
+      "name": "frame_001.png",
+      "original": 869,
+      "compressed": 2187,
+      "ratio": 0.3973479652491998
+    },
+    {
+      "name": "frame_002.png",
+      "original": 869,
+      "compressed": 2187,
+      "ratio": 0.3973479652491998
+    },
+    {
+      "name": "frame_003.png",
+      "original": 869,
+      "compressed": 2186,
+      "ratio": 0.39752973467520586
+    },
+    {
+      "name": "frame_004.png",
+      "original": 869,
+      "compressed": 2186,
+      "ratio": 0.39752973467520586
+    },
+    {
+      "name": "frame_005.png",
+      "original": 868,
+      "compressed": 2186,
+      "ratio": 0.3970722781335773
+    },
+    {
+      "name": "frame_006.png",
+      "original": 868,
+      "compressed": 2186,
+      "ratio": 0.3970722781335773
+    },
+    {
+      "name": "frame_007.png",
+      "original": 869,
+      "compressed": 2186,
+      "ratio": 0.39752973467520586
+    },
+    {
+      "name": "frame_008.png",
+      "original": 869,
+      "compressed": 2187,
+      "ratio": 0.3973479652491998
+    },
+    {
+      "name": "frame_009.png",
+      "original": 869,
+      "compressed": 2187,
+      "ratio": 0.3973479652491998
+    }
+  ],
+  "compression_ratios": [
+    0.16918152720621857,
+    0.3973479652491998,
+    0.3973479652491998,
+    0.39752973467520586,
+    0.39752973467520586,
+    0.3970722781335773,
+    0.3970722781335773,
+    0.39752973467520586,
+    0.3973479652491998,
+    0.3973479652491998
+  ],
+  "total_size_mb": 0.020852088928222656,
+  "original_size_mb": 0.007809638977050781,
+  "avg_compression_ratio": 0.37453071484957895,
+  "compression_rate": 0.1752003205128205
+}
