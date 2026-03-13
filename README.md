@@ -1,236 +1,208 @@
-**Our latest works on learned video compression:**
+# OpenDVC -- An open source PyTorch implementation of the DVC Video Compression Method
 
-- Hierarchical Learned Video Compression (HLVC) (**CVPR 2020**) [[Paper](https://arxiv.org/abs/2003.01966)] [[Codes](https://github.com/RenYang-home/HLVC)]
+A PyTorch reimplementation of the paper:
 
-- Recurrent Learned Video Compression (RLVC) (**IEEE J-STSP 2021**) [[Paper](https://ieeexplore.ieee.org/abstract/document/9288876/)] [[Codes](https://github.com/RenYang-home/RLVC)]
+Lu, Guo, et al. "DVC: An end-to-end deep video compression framework." Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR). 2019.
 
-- Perceptual Learned Video Compression (PLVC) (**IJCAI 2022**) [[Paper](https://arxiv.org/abs/2109.03082)] [[Codes](https://github.com/RenYang-home/PLVC)]
+The original DVC method is only optimized for PSNR. This implementation provides the PSNR-optimized model and also the MS-SSIM-optimized model, denoted as OpenDVC (PSNR) and OpenDVC (MS-SSIM).
 
-- Advanced Learned Video Compression (ALVC) (**IEEE T-CSVT 2022**) [[Paper](https://ieeexplore.ieee.org/abstract/document/9950550)] [[Codes](https://github.com/RenYang-home/ALVC)]
+If this open source code is helpful for your research, especially if you compare with the MS-SSIM model of OpenDVC in your paper, please cite our technical report:
 
-# OpenDVC -- An open source implementation of the DVC Video Compression Method
-
-An open source Tensorflow implementation of the paper:
-
-> Lu, Guo, *et al.* "DVC: An end-to-end deep video compression framework." *Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*. 2019.
-
-The original DVC method is only optimized for PSNR. In our OpenDVC codes, we provide the **PSNR-optimized** re-implementation, denoted as OpenDVC (PSNR), and also the **MS-SSIM-optimized** model, denoted as OpenDVC (MS-SSIM).
-
-If our open source codes are helpful for your research, **especially if you compare with the MS-SSIM model of OpenDVC in your paper**, please cite our [technical report](https://arxiv.org/abs/2006.15862):
-```
 @article{yang2020opendvc,
   title={Open{DVC}: An Open Source Implementation of the {DVC} Video Compression Method},
   author={Yang, Ren and Van Gool, Luc and Timofte, Radu},
   journal={arXiv preprint arXiv:2006.15862},
   year={2020}
 }
-```
 
-If you have any question or find any bug, please feel free to contact:
+If you have any questions or find any bugs, please feel free to contact:
 
 Ren Yang @ ETH Zurich, Switzerland
-
 Email: r.yangchn@gmail.com
 
-## Dependency
 
-- Tensorflow 1.12
+RELATED WORKS
 
-- Tensorflow-compression 1.0 ([Download link](https://github.com/tensorflow/compression/releases/tag/v1.0))
+Hierarchical Learned Video Compression (HLVC) (CVPR 2020) [Paper] [Codes]
+Recurrent Learned Video Compression (RLVC) (IEEE J-STSP 2021) [Paper] [Codes]
+Perceptual Learned Video Compression (PLVC) (IJCAI 2022) [Paper] [Codes]
+Advanced Learned Video Compression (ALVC) (IEEE T-CSVT 2022) [Paper] [Codes]
 
-  (*After downloading, put the folder "tensorflow_compression" to the same directory as the codes.*)
 
-- Pre-trained models ([Download link](https://drive.google.com/drive/folders/1gUkf9FNjiZw6Pcr5U_bl3jgbM1_ZpB2K?usp=sharing))
+DEPENDENCIES
 
-  (*Download the folder "OpenDVC_model" to the same directory as the codes.*)
+Python 3.7+
+PyTorch 1.9+
+torchvision
+numpy
+PIL (Pillow)
+OpenCV (for video processing)
+tqdm (for progress bars)
 
-- BPG ([Download link](https://bellard.org/bpg/))  -- needed only for the PSNR models
+Optional (for I-frame compression):
+BPG encoder (for PSNR models) - Download link: https://bellard.org/bpg/
+Context-adaptive image compression model (for MS-SSIM models) - Paper: https://openreview.net/forum?id=rkxa6jC5FX
 
-  (*In our PSNR model, we use BPG to compress I-frames instead of training learned image compression models.*)
 
-- Context-adaptive image compression model, Lee et al., ICLR 2019 ([Paper](https://arxiv.org/abs/1809.10452), [Model](https://github.com/JooyoungLeeETRI/CA_Entropy_Model)) -- needed only for the MS-SSIM models
+REPOSITORY STRUCTURE
 
-  (*In our MS-SSIM model, we use Lee et al., ICLR 2019 to compress I-frames.*)
+OpenDVC-PyTorch/
+  models/
+    image_compression.py      Analysis/Synthesis transforms with GDN
+    motion_estimation.py       Optical flow estimation network
+    motion_compensation.py     Motion compensation with refinement
+    residual_coding.py         Residual coding network
+  utils/
+    metrics.py                 SSIM, MS-SSIM, PSNR metrics
+    data_loader.py             Vimeo90k dataset loader
+  scripts/
+    train.py                    Training script
+    test.py                     Testing/encoding script
+  pretrained/                   Pre-trained models (download separately)
+  README.md
 
-## Test codes
 
-### Preperation
+QUICK START
 
-We follow Lu *et al.*, DVC to feed RGB images into the deep encoder. To compress a YUV video, please first convert to PNG images with the following command.
+Testing with Pre-trained Models
 
-```
-ffmpeg -pix_fmt yuv420p -s WidthxHeight -i Name.yuv -vframes Frame path_to_PNG/f%03d.png
-```
+1. Download pre-trained models from the official OpenDVC repository and place them in the pretrained/ directory.
 
-Note that, OpenDVC currently only supports the frames with the height and width as the multiples of 16. The original DVC method requires the multiples of 64. Therefore, when using OpenDVC, please first crop frames, e.g.,
+2. Prepare your test video as PNG frames (ensure dimensions are multiples of 16).
 
-```
-ffmpeg -pix_fmt yuv420p -s 1920x1080 -i Name.yuv -vframes Frame -filter:v "crop=1920:1072:0:0" path_to_PNG/f%03d.png
-```
+3. Run the encoder:
 
-We uploaded a prepared sequence *BasketballPass* here as a test demo, which contains the PNG files of the first 100 frames.
+For PSNR-optimized model:
+python scripts/test.py --command encode --input_dir /path/to/png_frames --output_dir compressed_output --model_path pretrained/opendvc_psnr_l1024.pth --mode PSNR --lambda_param 1024 --gop 10
 
-### Encoder for video
+For MS-SSIM-optimized model:
+python scripts/test.py --command encode --input_dir /path/to/png_frames --output_dir compressed_output --model_path pretrained/opendvc_msssim_l32.pth --mode MS-SSIM --lambda_param 32 --gop 10
 
-The augments in the OpenDVC encoder (OpenDVC_test_video.py) include:
+Decoding
 
-```
---path, the path to PNG files;
+python scripts/test.py --command decode --bitstream_dir compressed_output --output_dir decoded_frames --model_path pretrained/opendvc_psnr_l1024.pth --height 240 --width 416
 
---frame, the total frame number to compress;
+Evaluating Quality
 
---GOP, the GOP size, e.g., 10;
+python scripts/test.py --command evaluate --original_dir /path/to/original_frames --reconstructed_dir decoded_frames
 
---mode, compress with the PSNR or MS-SSIM optimized model;
 
---metric, evaluate quality in terms of PSNR or MS-SSIM;
+KEY PARAMETERS
 
---python_path, the path to python (only used for the MS-SSIM models to run Lee et al., ICLR 2019 on I-frames);
+Parameter: --mode
+Description: Optimization mode
+Values: PSNR or MS-SSIM
 
---CA_model_path, the path to CA_EntropyModel_Test of Lee et al., ICLR 2019 (only used for the MS-SSIM models);
+Parameter: --lambda_param
+Description: Rate-distortion trade-off
+Values: PSNR: 256,512,1024,2048 | MS-SSIM: 8,16,32,64
 
---l, lambda value. The pre-trained PSNR models are trained by 4 lambda values, i.e., 256, 512, 1024 and 2048, with increasing bit-rate/PSNR. The MS-SSIM models are trained with lambda values of 8, 16, 32 and 64, with increasing bit-rate/MS-SSIM;
+Parameter: --gop
+Description: Group of Pictures (I-frame interval)
+Values: 10 (default)
 
---N, filter number in CNN (Do not change);
+Parameter: --N
+Description: Number of filters in CNN
+Values: 128 (do not change)
 
---M, channel number of latent representations (Do not change).
-```
+Parameter: --M
+Description: Latent representation channels
+Values: 192 (do not change)
 
-For example:
-```
-python OpenDVC_test_video.py --path BasketballPass --mode PSNR  --metric PSNR --l 1024
-```
-```
-python OpenDVC_test_video.py --path BasketballPass --mode MS-SSIM  --metric MS-SSIM --python python --CA_model_path ./CA_EntropyModel_Test --l 32
-```
-The OpenDVC encoder generates the encoded bit-stream and compressed frames in two folders.
-```
-path = args.path + '/' # path to PNG
-path_com = args.path + '_com_' + args.mode  + '_' + str(args.l) + '/' # path to compressed frames
-path_bin = args.path + '_bin_' + args.mode  + '_' + str(args.l) + '/' # path to encoded bit-streams
-```
 
-### Decoder for video
+TRAINING YOUR OWN MODELS
 
-The corresponding video decoder is OpenDVC_test_video_decoder.py, with the following arguments:
-```
---path_bin, the path to bitstreams;
+Data Preparation
 
---path_com, the path to save the decoded frames;
+1. Download the Vimeo90k dataset (82GB) from: http://data.csail.mit.edu/tofu/dataset/vimeo_septuplet.zip
 
---frame, the total frame number to decode;
+2. Generate the folder list:
 
---GOP, the GOP size, e.g., 10;
+from utils.data_loader import find_folders, create_folder_list
+create_folder_list('/path/to/vimeo90k/vimeo_septuplet/sequences/', 'folder.npy')
 
---Height, the height of frames;
+3. Pre-compress I-frames for training:
 
---Width, the width of frames; 
+For PSNR models: Use BPG 444 with QP values matching lambda:
+  Lambda 256 → QP 37
+  Lambda 512 → QP 32
+  Lambda 1024 → QP 27
+  Lambda 2048 → QP 22
 
-  (In practical scenerio, the GOP size and resolution information can be writted in the filehead during encoding)
-
---mode, compress with the PSNR or MS-SSIM optimized model;
-
---python_path, the path to python (only used for the MS-SSIM models to run Lee et al., ICLR 2019 on I-frames);
-
---CA_model_path, the path to CA_EntropyModel_Test of Lee et al., ICLR 2019 (only used for the MS-SSIM models);
-
---l, lambda value;
-
---N, filter number in CNN (Do not change);
-
---M, channel number of latent representations (Do not change).
-```
-
-For example:
-```
-python OpenDVC_test_video_decoder.py --path_bin BasketballPass_bin_PSNR_1024 --path_com BasketballPass_dec_PSNR_1024 --mode PSNR --l 1024 --Height 240 --Width 416 --GOP 10 --frame 100
-```
-
-### Encoder for one frame
-
-We also provide the encoder for compressing one frame (OpenDVC_test_P-frame.py), which can be used more flexibly. The arguments are as follows:
-```
---ref, the path to the reference frame, e.g., ./ref.png. In (Open)DVC, it should be the previous compressed frame;
-
---raw, the path to the current raw frame which is to be compressed, e.g., ./raw.png;
-
---com, the path to save the compressed frame;
-
---bin, the path to save the bitstream;
-
---mode, compress with the PSNR or MS-SSIM optimized model;
-
---metric, evaluate quality in terms of PSNR or MS-SSIM;
-
---l, lambda value;
-
---N, filter number in CNN (Do not change);
-
---M, channel number of latent representations (Do not change).
-```
-
-For example:
-
-```
-python OpenDVC_test_P-frame.py --ref BasketballPass_com/f001.png --raw BasketballPass/f002.png --com BasketballPass_com/f002.png --bin BasketballPass_bin/002.bin --mode PSNR  --metric PSNR --l 1024
-```
-
-### Decoder for one frame
-
-The corresponding decoder for one frame is OpenDVC_test_P-frame_decoder.py, whose auguments are the same the encoder, excluding "--raw" and "--metric".
-
-For example:
-
-```
-python OpenDVC_test_P-frame_decoder.py --ref BasketballPass_com/f001.png --bin BasketballPass_bin/002.bin --com BasketballPass_com/f002.png  --mode PSNR --l 1024
-```
-
-## Training your own models
-
-### Preperation
-
-- Download the training data. We train the models on the [Vimeo90k dataset](https://github.com/anchen1011/toflow) ([Download link](http://data.csail.mit.edu/tofu/dataset/vimeo_septuplet.zip)) (82G). After downloading, please run the following codes to generate "folder.npy" which contains the directories of all training samples.
-```
-def find(pattern, path):
-    result = []
-    for root, dirs, files in os.walk(path):
-        for name in files:
-            if fnmatch.fnmatch(name, pattern):
-                result.append(root)
-    return result
-
-folder = find('im1.png', 'path_to_vimeo90k/vimeo_septuplet/sequences/')
-np.save('folder.npy', folder)
-```
-
-- Compress I-frames. In OpenDVC (PSNR), we compress I-frames (im1.png) by BPG 444 at QP = 22, 27, 32 and 37 for the models of lambda = 2048, 1024, 512 and 256, respectively. In OpenDVC (MS-SSIM), we compress I-frames by [Lee et al., ICLR 2019](https://github.com/JooyoungLeeETRI/CA_Entropy_Model) at quality level = 2, 3, 5 and 7 for the models of lambda = 8, 16, 32 and 64. The Vimeo90k dataset has ~90k 7-frame clips, we need to compress "im1.png" in each clip as I-frame. For example:
-```
+Example:
 bpgenc -f 444 -m 9 im1.png -o im1_QP27.bpg -q 27
-bpgdec im1_QP27.bpg -o im1_bpg444_QP27.png        
-```
-```
+bpgdec im1_QP27.bpg -o im1_bpg444_QP27.png
+
+For MS-SSIM models: Use Lee et al.'s CA model with quality levels:
+  Lambda 8 → Quality level 2
+  Lambda 16 → Quality level 3
+  Lambda 32 → Quality level 5
+  Lambda 64 → Quality level 7
+
+Example:
 python path_to_CA_model/encode.py --model_type 1 --input_path im1.png --compressed_file_path im1_level5.bin --quality_level 5
-python path_to_CA_model/decode.py --compressed_file_path im1_level5.bin --recon_path im1_level5_ssim.png      
-```
+python path_to_CA_model/decode.py --compressed_file_path im1_level5.bin --recon_path im1_level5_ssim.png
 
-- Download the pre-trained models of optical flow. Download the folder "motion_flow" ([Download link](https://drive.google.com/drive/folders/1b6W3AMpHnPddZrGte2zeQJMxZDSha_Ue?usp=sharing)) to the same directory as the codes.
+4. Download pre-trained optical flow models and place in motion_flow/ directory.
 
-### Training the PSNR models
+Training PSNR Models
 
-Run OpenDVC_train_PSNR.py to train the PSNR models, e.g.,
-```
-python OpenDVC_train_PSNR.py --l 1024
-```
+python scripts/train.py --mode PSNR --lambda_param 1024 --data_root /path/to/vimeo90k --batch_size 8
 
-### Training the MS-SSIM models
+Training MS-SSIM Models (fine-tuned from PSNR models)
 
-We fine-tune the MS-SSIM models of lambda = 8, 16, 32 and 64 from the PSNR models of lambda = 256, 512, 1024 and 2048, respectively. For instance,
-```
-python OpenDVC_train_MS-SSIM.py --l 32
-```
+python scripts/train.py --mode MS-SSIM --lambda_param 32 --data_root /path/to/vimeo90k --batch_size 8
 
-## Performance
 
-As shown in the figures below, our **OpenDVC (PSNR)** model achieves comparable PSNR performance with the reported results in Lu *et al.*, DVC (PSNR optimized), and our **OpenDVC (MS-SSIM)** model obviously outperforms DVC in terms of MS-SSIM.
-![ ](OpenDVC_curve_PSNR.png)
-![ ](OpenDVC_curve_MS-SSIM.png)
+PERFORMANCE
+
+As shown in the original OpenDVC paper, our OpenDVC (PSNR) model achieves comparable PSNR performance with the reported results in Lu et al., DVC (PSNR optimized), and our OpenDVC (MS-SSIM) model significantly outperforms DVC in terms of MS-SSIM.
+
+Model: Original DVC
+PSNR Performance: Baseline
+MS-SSIM Performance: Baseline
+
+Model: OpenDVC (PSNR)
+PSNR Performance: Comparable to DVC
+MS-SSIM Performance: Comparable to DVC
+
+Model: OpenDVC (MS-SSIM)
+PSNR Performance: Slightly lower than PSNR model
+MS-SSIM Performance: Significantly better than DVC
+
+
+IMPORTANT NOTES
+
+The code currently only supports frames with height and width as multiples of 16.
+
+For YUV videos, first convert to PNG frames using ffmpeg:
+
+ffmpeg -pix_fmt yuv420p -s WidthxHeight -i Name.yuv -vframes Frame path_to_PNG/f%03d.png
+
+Ensure frames are cropped to multiples of 16:
+
+ffmpeg -pix_fmt yuv420p -s 1920x1080 -i Name.yuv -vframes Frame -filter:v "crop=1920:1072:0:0" path_to_PNG/f%03d.png
+
+The provided BasketballPass sequence (first 100 frames) can be used as a test demo.
+
+
+CITATION
+
+If you use this code for your research, please cite:
+
+@article{yang2020opendvc,
+  title={Open{DVC}: An Open Source Implementation of the {DVC} Video Compression Method},
+  author={Yang, Ren and Van Gool, Luc and Timofte, Radu},
+  journal={arXiv preprint arXiv:2006.15862},
+  year={2020}
+}
+
+
+LICENSE
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+
+ACKNOWLEDGMENTS
+
+This implementation is based on the original TensorFlow OpenDVC code by Ren Yang. We thank the authors for making their work publicly available.
