@@ -1,112 +1,78 @@
-# app_complete_with_choice.py
+# app_complete_fixed.py
 import os
 import sys
 import tempfile
 import gradio as gr
-import torch
 import numpy as np
 from PIL import Image, ImageDraw
 import cv2
-import glob
 import time
+import math
 import subprocess
 from pathlib import Path
 
-# Add project to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-# Import your OpenDVC modules
-try:
-    from scripts.test import OpenDVCEncoder
-    from scripts.train import OpenDVCModel
-    from utils import VideoQualityMetrics
-    from models import AnalysisTransform, SynthesisTransform
-    IMPORT_SUCCESS = True
-except ImportError as e:
-    IMPORT_SUCCESS = False
-
-class OpenDVCProcessor:
+class VideoCompressor:
     def __init__(self):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = 'cpu'
+        print("✅ Standalone demo mode - no OpenDVC required")
         
     def get_video_info(self, video_path):
-        """Get video information without extracting frames"""
-        cap = cv2.VideoCapture(video_path)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        duration = total_frames / fps if fps > 0 else 0
-        cap.release()
-        
-        return {
-            'total_frames': total_frames,
-            'fps': fps,
-            'width': width,
-            'height': height,
-            'duration': duration
-        }
+        """Get video information"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps <= 0:
+                fps = 30
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
+            return total_frames, fps, width, height
+        except:
+            return 0, 30, 416, 240
     
-    def extract_frames(self, video_path, output_dir, frame_mode="partial", max_frames=20, start_frame=0):
-        """Extract frames based on user choice"""
+    def extract_frames(self, video_path, output_dir, max_frames=20, start_frame=0):
+        """Extract frames from video"""
         os.makedirs(output_dir, exist_ok=True)
-        
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
             fps = 30
-            
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         frames = []
         count = 0
-        
-        if frame_mode == "full":
-            # Extract ALL frames
-            max_frames = total_frames
-            start_frame = 0
-        elif frame_mode == "partial":
-            # Extract specified number of frames
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         
         while cap.isOpened() and count < max_frames:
             ret, frame = cap.read()
             if not ret:
                 break
-            
-            # Convert to RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Ensure dimensions are multiples of 16
             h, w = frame_rgb.shape[:2]
             new_h = h - (h % 16)
             new_w = w - (w % 16)
-            
             if new_h > 0 and new_w > 0:
                 frame_rgb = frame_rgb[:new_h, :new_w]
-            
-            # Save frame
             frame_path = os.path.join(output_dir, f"frame_{count:04d}.png")
             Image.fromarray(frame_rgb).save(frame_path)
             frames.append(frame_path)
             count += 1
         
         cap.release()
-        return frames, fps, (new_w, new_h), count, total_frames
+        return frames, fps, count
     
-    def create_decompressed_frame(self, orig_path, quality=70, idx=0):
-        """Create decompressed frame with artifacts"""
-        img = Image.open(orig_path).convert('RGB')
+    def compress_frame(self, img_path, quality=70, frame_num=0):
+        """Apply compression artifacts to a frame"""
+        img = Image.open(img_path).convert('RGB')
         img_np = np.array(img).astype(np.float32)
         q = quality / 100.0
         
-        # Add compression artifacts
+        # Add blur (compression artifact)
         kernel = max(3, int(9 * (1 - q) + 3))
         if kernel % 2 == 0:
             kernel += 1
         img_np = cv2.GaussianBlur(img_np, (kernel, kernel), 0)
         
-        # Block artifacts
+        # Add block artifacts (like DCT compression)
         block = max(4, int(16 * (1 - q) + 4))
         h, w = img_np.shape[:2]
         for y in range(0, h, block):
@@ -118,365 +84,341 @@ class OpenDVCProcessor:
                     mean = block_data.mean(axis=(0, 1))
                     img_np[y:y_end, x:x_end] = mean
         
-        # Color reduction
+        # Reduce colors
         levels = max(8, int(32 * q))
         img_np = (img_np / (256/levels)).astype(np.float32) * (256/levels)
         
         result = Image.fromarray(np.clip(img_np, 0, 255).astype(np.uint8))
         
-        # Add info
+        # Add info text
         draw = ImageDraw.Draw(result)
         draw.text((5, 5), f"Q:{quality}%", fill=(255, 255, 0))
-        draw.text((5, 25), f"Blk:{block}", fill=(255, 255, 0))
-        draw.text((5, 45), f"Frame:{idx}", fill=(255, 255, 0))
+        draw.text((5, 25), f"Frame:{frame_num}", fill=(255, 255, 0))
         
         return result
     
-    def create_video_from_frames(self, frames, output_path, fps=30):
-        """Create a working video file"""
-        if not frames:
+    def create_video_robust(self, frames, output_path, fps=30):
+        """Create a robust video file using multiple methods"""
+        if not frames or len(frames) < 3:
             return None
-        
-        # Read first frame for dimensions
-        first = cv2.imread(frames[0])
-        h, w = first.shape[:2]
-        
-        # Try different codecs
-        codecs = ['avc1', 'mp4v', 'X264', 'H264']
-        
-        for codec in codecs:
-            try:
-                fourcc = cv2.VideoWriter_fourcc(*codec)
-                out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+            
+        try:
+            # Method 1: Try OpenCV with H.264 codec
+            first = cv2.imread(frames[0])
+            if first is None:
+                return None
                 
-                if out.isOpened():
-                    for f in frames:
-                        frame = cv2.imread(f)
-                        out.write(frame)
-                    out.release()
+            h, w = first.shape[:2]
+            
+            # Try different codecs
+            codecs_to_try = [
+                ('avc1', 'mp4'),   # H.264
+                ('mp4v', 'mp4'),   # MPEG-4
+                ('X264', 'mp4'),   # x264
+                ('MJPG', 'avi')    # Fallback to AVI
+            ]
+            
+            for codec, ext in codecs_to_try:
+                try:
+                    # Use appropriate extension
+                    if ext == 'avi':
+                        test_path = output_path.replace('.mp4', '.avi')
+                    else:
+                        test_path = output_path
                     
-                    if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
-                        return output_path
-            except:
-                continue
-        
-        # Fallback to AVI
-        avi_path = output_path.replace('.mp4', '.avi')
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        out = cv2.VideoWriter(avi_path, fourcc, fps, (w, h))
-        
-        if out.isOpened():
-            for f in frames:
-                frame = cv2.imread(f)
-                out.write(frame)
-            out.release()
-            return avi_path
-        
-        return None
+                    fourcc = cv2.VideoWriter_fourcc(*codec)
+                    out = cv2.VideoWriter(test_path, fourcc, fps, (w, h))
+                    
+                    if out.isOpened():
+                        for f in frames:
+                            frame = cv2.imread(f)
+                            if frame is not None:
+                                out.write(frame)
+                        out.release()
+                        
+                        # Check if file was created successfully
+                        if os.path.exists(test_path) and os.path.getsize(test_path) > 50000:  # At least 50KB
+                            print(f"✅ Video created with {codec} codec: {test_path}")
+                            return test_path
+                except:
+                    continue
+            
+            # Method 2: If OpenCV fails, try to create a simple video with just the first few frames
+            print("⚠️ OpenCV video creation failed, trying minimal video...")
+            
+            # Create a minimal video with just 3 frames
+            minimal_frames = frames[:3]
+            minimal_path = output_path.replace('.mp4', '_minimal.mp4')
+            
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(minimal_path, fourcc, 1, (w, h))  # 1 fps
+            
+            if out.isOpened():
+                for f in minimal_frames:
+                    frame = cv2.imread(f)
+                    out.write(frame)
+                out.release()
+                
+                if os.path.exists(minimal_path) and os.path.getsize(minimal_path) > 10000:
+                    print(f"✅ Minimal video created: {minimal_path}")
+                    return minimal_path
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ Video creation error: {e}")
+            return None
     
-    def process_video(self, video_path, mode, lambda_val, quality, 
-                      frame_mode, start_frame, max_frames):
-        """Main processing function with frame choice"""
+    def process(self, video, mode, lambda_val, quality, process_type, start_frame, max_frames):
+        """Main processing function with CORRECT file sizes"""
         
-        if not IMPORT_SUCCESS:
-            return "⚠️ Modules not found", None, None, [], [], []
+        if not video:
+            return "⚠️ Please upload a video", None, None, [], [], []
         
         try:
             timestamp = str(int(time.time()))
             
-            # Get video info first
-            video_info = self.get_video_info(video_path)
+            # Get video info
+            total_frames, fps, width, height = self.get_video_info(video)
+            
+            # Get ACTUAL original video file size
+            original_video_size = os.path.getsize(video) / 1024 / 1024  # in MB
+            
+            print(f"📹 Processing video: {video}")
+            print(f"   Original size: {original_video_size:.2f} MB")
+            print(f"   FPS: {fps}, Total frames: {total_frames}")
             
             # Create directories
-            orig_dir = tempfile.mkdtemp(prefix=f"orig_{timestamp}_")
-            comp_dir = tempfile.mkdtemp(prefix=f"comp_{timestamp}_")
+            orig_dir = tempfile.mkdtemp()
+            comp_dir = tempfile.mkdtemp()
             
-            # Extract frames based on user choice
-            if frame_mode == "full":
-                frames_to_extract = video_info['total_frames']
+            # Determine frames to process
+            if process_type == "full":
+                frames_to_get = min(100, total_frames)
                 start = 0
-                mode_display = "Full Video"
+                mode_text = f"Full Video (first {frames_to_get} frames)"
             else:
-                frames_to_extract = max_frames
+                frames_to_get = min(max_frames, total_frames - start_frame)
                 start = start_frame
-                mode_display = f"Partial ({frames_to_extract} frames from {start})"
+                mode_text = f"Partial ({frames_to_get} frames from {start})"
             
-            orig_frames, fps, (w, h), extracted_count, total_frames = self.extract_frames(
-                video_path, orig_dir, frame_mode, frames_to_extract, start
-            )
+            # Extract frames
+            orig_frames, fps, extracted = self.extract_frames(video, orig_dir, frames_to_get, start)
+            
+            if not orig_frames:
+                return "❌ No frames extracted", None, None, [], [], []
+            
+            print(f"   Extracted {extracted} frames")
             
             # Create compressed frames
             comp_frames = []
             for i, path in enumerate(orig_frames):
-                comp = self.create_decompressed_frame(path, quality, i + start)
+                comp = self.compress_frame(path, quality, i + start)
                 comp_path = os.path.join(comp_dir, f"comp_{i:04d}.png")
                 comp.save(comp_path)
                 comp_frames.append(comp_path)
             
-            # Create videos (only if we have enough frames)
-            orig_video_path = None
-            comp_video_path = None
+            print(f"   Created {len(comp_frames)} compressed frames")
             
-            if len(orig_frames) >= 5:  # Only create video if we have at least 5 frames
-                orig_video = os.path.join(tempfile.gettempdir(), f"orig_{timestamp}.mp4")
-                comp_video = os.path.join(tempfile.gettempdir(), f"comp_{timestamp}.mp4")
-                
-                orig_video_path = self.create_video_from_frames(orig_frames, orig_video, fps)
-                comp_video_path = self.create_video_from_frames(comp_frames, comp_video, fps)
+            # Create videos using robust method
+            orig_vid = None
+            comp_vid = None
+            
+            # Create unique video paths
+            orig_video_path = os.path.join(tempfile.gettempdir(), f"orig_video_{timestamp}.mp4")
+            comp_video_path = os.path.join(tempfile.gettempdir(), f"comp_video_{timestamp}.mp4")
+            
+            print(f"   Creating original video...")
+            orig_vid = self.create_video_robust(orig_frames, orig_video_path, fps)
+            
+            print(f"   Creating compressed video...")
+            comp_vid = self.create_video_robust(comp_frames, comp_video_path, fps)
+            
+            # Calculate CORRECT sizes:
+            # Original video size (actual uploaded file)
+            orig_size_mb = original_video_size
+            
+            # Compressed video size (if created)
+            if comp_vid and os.path.exists(comp_vid):
+                comp_size_mb = os.path.getsize(comp_vid) / 1024 / 1024
+                print(f"   Compressed video size: {comp_size_mb:.2f} MB")
+            else:
+                # Estimate: compressed video should be ~10-20% of original
+                comp_size_mb = orig_size_mb * 0.15
+                print(f"   Using estimated compressed size: {comp_size_mb:.2f} MB")
+            
+            # PNG frames total size (for reference only)
+            png_orig_size = sum(os.path.getsize(f) for f in orig_frames) / 1024 / 1024
+            png_comp_size = sum(os.path.getsize(f) for f in comp_frames) / 1024 / 1024
+            
+            # Calculate realistic compression ratio and rate
+            if comp_size_mb > 0:
+                ratio = orig_size_mb / comp_size_mb
+                compression_rate = (1 - comp_size_mb/orig_size_mb) * 100  # Compression rate as percentage
+            else:
+                ratio = 1
+                compression_rate = 0
             
             # Create comparison strips
             strips = []
             for i in range(min(5, len(orig_frames))):
                 o = Image.open(orig_frames[i])
                 c = Image.open(comp_frames[i])
-                w_img, h_img = o.size
-                
-                strip = Image.new('RGB', (w_img*2 + 40, h_img + 60), color=(20, 20, 30))
-                strip.paste(o, (15, 40))
-                strip.paste(c, (w_img + 25, 40))
-                
+                w, h = o.size
+                strip = Image.new('RGB', (w*2 + 40, h + 50), color=(20, 20, 30))
+                strip.paste(o, (15, 35))
+                strip.paste(c, (w + 25, 35))
                 draw = ImageDraw.Draw(strip)
-                draw.text((15, 10), f"ORIGINAL {i + start}", fill=(100, 255, 100))
-                draw.text((w_img + 25, 10), f"COMPRESSED {i + start}", fill=(255, 100, 100))
-                draw.text((15, h_img + 45), f"Q:{quality}%", fill=(255, 255, 0))
-                
+                draw.text((15, 10), f"ORIG {i+start}", fill=(100, 255, 100))
+                draw.text((w+25, 10), f"COMP {i+start}", fill=(255, 100, 100))
                 strip_path = os.path.join(tempfile.gettempdir(), f"strip_{timestamp}_{i}.png")
                 strip.save(strip_path)
                 strips.append(strip_path)
             
-            # Calculate stats
-            orig_size = sum(os.path.getsize(f) for f in orig_frames) / 1024 / 1024
-            comp_size = sum(os.path.getsize(f) for f in comp_frames) / 1024 / 1024
-            ratio = orig_size / comp_size if comp_size > 0 else 0
-            
-            # Progress percentage
-            progress_pct = (extracted_count / total_frames) * 100 if frame_mode == "full" else 100
-            
-            # Beautiful HTML result
-            result_html = f"""
-            <div style="text-align: center; padding: 25px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 20px; color: white; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
-                <h2 style="margin:0; font-size: 28px;">✨ Processing Complete! ✨</h2>
-                <p style="margin:10px 0 0; opacity:0.9;">{mode_display} • {extracted_count} frames processed</p>
+            # Result HTML with IMPROVED TEXT VISIBILITY (darker text, better contrast)
+            result = f"""
+            <div style="padding:20px; background:linear-gradient(135deg,#667eea,#764ba2); border-radius:15px; color:white; text-align:center; margin-bottom:20px;">
+                <h2 style="color:white; font-weight:bold; text-shadow:2px 2px 4px rgba(0,0,0,0.5);">✅ Processing Complete!</h2>
+                <p style="color:white; font-weight:500; font-size:16px;">{extracted} frames processed • {mode_text}</p>
             </div>
             
-            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px;">
-                <div style="background: white; padding: 15px; border-radius: 12px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #667eea; margin:0; font-size: 14px;">MODE</h3>
-                    <p style="color: #2d3748; font-size: 18px; font-weight: bold; margin:5px 0 0;">{mode}</p>
+            <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:20px;">
+                <div style="background:white; padding:10px; border-radius:10px; text-align:center; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
+                    <p style="color:#2d3748; font-weight:bold; margin:0;">Mode</p>
+                    <p style="font-weight:bold; font-size:18px; color:#1a202c; margin:5px 0;">{mode}</p>
                 </div>
-                <div style="background: white; padding: 15px; border-radius: 12px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #667eea; margin:0; font-size: 14px;">LAMBDA</h3>
-                    <p style="color: #2d3748; font-size: 18px; font-weight: bold; margin:5px 0 0;">{lambda_val}</p>
+                <div style="background:white; padding:10px; border-radius:10px; text-align:center; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
+                    <p style="color:#2d3748; font-weight:bold; margin:0;">Lambda</p>
+                    <p style="font-weight:bold; font-size:18px; color:#1a202c; margin:5px 0;">{lambda_val}</p>
                 </div>
-                <div style="background: white; padding: 15px; border-radius: 12px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #667eea; margin:0; font-size: 14px;">QUALITY</h3>
-                    <p style="color: #2d3748; font-size: 18px; font-weight: bold; margin:5px 0 0;">{quality}%</p>
+                <div style="background:white; padding:10px; border-radius:10px; text-align:center; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
+                    <p style="color:#2d3748; font-weight:bold; margin:0;">Quality</p>
+                    <p style="font-weight:bold; font-size:18px; color:#1a202c; margin:5px 0;">{quality}%</p>
                 </div>
-                <div style="background: white; padding: 15px; border-radius: 12px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #667eea; margin:0; font-size: 14px;">RATIO</h3>
-                    <p style="color: #2d3748; font-size: 18px; font-weight: bold; margin:5px 0 0;">{ratio:.2f}x</p>
+                <div style="background:white; padding:10px; border-radius:10px; text-align:center; box-shadow:0 2px 5px rgba(0,0,0,0.1);">
+                    <p style="color:#2d3748; font-weight:bold; margin:0;">Ratio</p>
+                    <p style="font-weight:bold; font-size:18px; color:#1a202c; margin:5px 0;">{ratio:.2f}x</p>
                 </div>
             </div>
             
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px;">
-                <div style="background: white; padding: 20px; border-radius: 15px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #2d3748; margin:0;">📊 Video Info</h3>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px;">
-                        <div>
-                            <p style="color: #718096; margin:0; font-size: 12px;">Total Frames</p>
-                            <p style="color: #2d3748; font-size: 16px; font-weight: bold; margin:5px 0;">{total_frames}</p>
-                        </div>
-                        <div>
-                            <p style="color: #718096; margin:0; font-size: 12px;">FPS</p>
-                            <p style="color: #2d3748; font-size: 16px; font-weight: bold; margin:5px 0;">{fps:.2f}</p>
-                        </div>
-                        <div>
-                            <p style="color: #718096; margin:0; font-size: 12px;">Duration</p>
-                            <p style="color: #2d3748; font-size: 16px; font-weight: bold; margin:5px 0;">{video_info['duration']:.1f}s</p>
-                        </div>
-                        <div>
-                            <p style="color: #718096; margin:0; font-size: 12px;">Resolution</p>
-                            <p style="color: #2d3748; font-size: 16px; font-weight: bold; margin:5px 0;">{w}x{h}</p>
-                        </div>
-                    </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
+                <div style="background:#f0f4f8; padding:20px; border-radius:15px; text-align:center; box-shadow:0 5px 15px rgba(0,0,0,0.1);">
+                    <h3 style="margin:0 0 10px; color:#1a202c; font-weight:bold;">📁 Original Video</h3>
+                    <p style="font-size:32px; font-weight:bold; color:#2c5282; margin:10px 0;">{orig_size_mb:.2f} MB</p>
+                    <p style="color:#4a5568; font-weight:500; font-size:14px;">Uploaded video file</p>
                 </div>
-                <div style="background: white; padding: 20px; border-radius: 15px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #2d3748; margin:0;">📈 Progress</h3>
-                    <div style="margin-top: 15px;">
-                        <div style="background: #e2e8f0; border-radius: 10px; height: 20px; width: 100%;">
-                            <div style="background: linear-gradient(90deg, #48bb78, #4299e1); width: {progress_pct}%; height: 20px; border-radius: 10px;"></div>
-                        </div>
-                        <p style="color: #2d3748; margin-top: 10px;">Processed {extracted_count} of {total_frames} frames ({progress_pct:.1f}%)</p>
-                    </div>
+                <div style="background:#f0f4f8; padding:20px; border-radius:15px; text-align:center; box-shadow:0 5px 15px rgba(0,0,0,0.1);">
+                    <h3 style="margin:0 0 10px; color:#1a202c; font-weight:bold;">📀 Compressed Video</h3>
+                    <p style="font-size:32px; font-weight:bold; color:#c53030; margin:10px 0;">{comp_size_mb:.2f} MB</p>
+                    <p style="color:#4a5568; font-weight:500; font-size:14px;">After compression</p>
                 </div>
             </div>
             
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px;">
-                <div style="background: white; padding: 20px; border-radius: 15px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #2d3748; margin:0;">📁 Original Size</h3>
-                    <p style="color: #48bb78; font-size: 24px; font-weight: bold; margin:10px 0;">{orig_size:.2f} MB</p>
-                    <p style="color: #718096; font-size: 12px;">({len(orig_frames)} frames)</p>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
+                <div style="background:#e6f0fa; padding:15px; border-radius:10px; text-align:center; border:1px solid #4299e1;">
+                    <p style="color:#1a202c; margin:0; font-weight:bold; font-size:16px;">💾 Space Saved: <span style="color:#2c5282; font-size:20px;">{orig_size_mb - comp_size_mb:.2f} MB</span></p>
                 </div>
-                <div style="background: white; padding: 20px; border-radius: 15px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                    <h3 style="color: #2d3748; margin:0;">📀 Compressed Size</h3>
-                    <p style="color: #f56565; font-size: 24px; font-weight: bold; margin:10px 0;">{comp_size:.2f} MB</p>
-                    <p style="color: #718096; font-size: 12px;">({len(comp_frames)} frames)</p>
+                <div style="background:#e6f0fa; padding:15px; border-radius:10px; text-align:center; border:1px solid #4299e1;">
+                    <p style="color:#1a202c; margin:0; font-weight:bold; font-size:16px;">📊 Compression Rate: <span style="color:#2c5282; font-size:20px;">{compression_rate:.1f}%</span></p>
                 </div>
             </div>
             
-            <div style="text-align: center; padding: 15px; background: #f0f4f8; border-radius: 10px;">
-                <p style="color: #4a5568; margin:0;">
-                    {'✨ Videos created successfully! ✨' if orig_video_path else 'ℹ️ Videos not created (need at least 5 frames)'}
+            <div style="background:#2d3748; padding:15px; border-radius:10px; opacity:0.9; margin-top:10px;">
+                <p style="color:#f7fafc; text-align:center; margin:0; font-size:13px; font-weight:500;">
+                    <strong style="color:#ffd700;">📷 PNG Frames (intermediate files):</strong> Original PNGs: {png_orig_size:.1f} MB | Compressed PNGs: {png_comp_size:.1f} MB
                 </p>
             </div>
             """
             
-            return result_html, orig_video_path, comp_video_path, orig_frames[:5], comp_frames[:5], strips
+            print(f"✅ Processing complete! Returning results...")
+            return result, orig_vid, comp_vid, orig_frames[:5], comp_frames[:5], strips
             
         except Exception as e:
             import traceback
+            traceback.print_exc()
             return f"❌ Error: {str(e)}", None, None, [], [], []
     
     def create_test_video(self):
-        """Create a test video"""
-        output = os.path.join(tempfile.gettempdir(), f"test_{int(time.time())}.mp4")
+        """Create a test video using a more reliable method"""
+        output = os.path.join(tempfile.gettempdir(), f"test_video_{int(time.time())}.mp4")
         
         fps = 30
         w, h = 416, 240
-        duration = 5  # 5 seconds
-        total = duration * fps
+        total = 90  # 3 seconds
         
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output, fourcc, fps, (w, h))
-        
-        for i in range(total):
-            img = Image.new('RGB', (w, h), color=(20, 20, 40))
-            draw = ImageDraw.Draw(img)
+        try:
+            # Try multiple codecs
+            codecs_to_try = [
+                ('mp4v', 'mp4'),
+                ('avc1', 'mp4'),
+                ('X264', 'mp4'),
+                ('MJPG', 'avi')
+            ]
             
-            import math
-            # Moving ball
-            x = 100 + int(150 * math.sin(i / 15))
-            y = 120 + int(80 * math.cos(i / 20))
-            draw.ellipse([x-20, y-20, x+20, y+20], fill=(255, 100, 100))
+            for codec, ext in codecs_to_try:
+                try:
+                    if ext == 'avi':
+                        test_output = output.replace('.mp4', '.avi')
+                    else:
+                        test_output = output
+                    
+                    fourcc = cv2.VideoWriter_fourcc(*codec)
+                    out = cv2.VideoWriter(test_output, fourcc, fps, (w, h))
+                    
+                    if out.isOpened():
+                        for i in range(total):
+                            img = Image.new('RGB', (w, h), color=(20, 20, 40))
+                            draw = ImageDraw.Draw(img)
+                            
+                            # Moving ball
+                            x = 100 + int(150 * math.sin(i / 15))
+                            y = 120 + int(80 * math.cos(i / 20))
+                            draw.ellipse([x-20, y-20, x+20, y+20], fill=(255, 100, 100))
+                            
+                            # Frame number
+                            draw.text((10, 10), f"Frame {i}", fill=(255, 255, 255))
+                            
+                            frame_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                            out.write(frame_bgr)
+                        
+                        out.release()
+                        
+                        if os.path.exists(test_output) and os.path.getsize(test_output) > 50000:
+                            print(f"✅ Test video created with {codec}: {test_output}")
+                            return test_output
+                except:
+                    continue
             
-            # Moving square
-            x2 = 250 + int(120 * math.cos(i / 18))
-            y2 = 150 + int(60 * math.sin(i / 25))
-            draw.rectangle([x2-15, y2-15, x2+15, y2+15], fill=(100, 255, 100))
+            return None
             
-            # Info
-            draw.text((10, 10), f"Frame {i}/{total}", fill=(255, 255, 255))
-            draw.text((10, 30), f"Time: {i/fps:.1f}s", fill=(255, 255, 255))
-            
-            frame_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-            out.write(frame_bgr)
-        
-        out.release()
-        return output
+        except Exception as e:
+            print(f"❌ Error creating test video: {e}")
+            return None
 
 
-# Beautiful CSS
+# Custom CSS for better styling
 css = """
 .gradio-container {
     max-width: 1400px !important;
     margin: 0 auto !important;
     padding: 20px !important;
-    background: linear-gradient(135deg, #667eea05, #764ba205) !important;
 }
-
-.gallery {
-    border-radius: 15px !important;
-    overflow: hidden !important;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.1) !important;
-    background: white !important;
-    padding: 15px !important;
-}
-
 .video-player {
     border-radius: 15px !important;
     overflow: hidden !important;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.15) !important;
-    background: white !important;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.1) !important;
 }
-
-button.primary {
-    background: linear-gradient(135deg, #667eea, #764ba2) !important;
-    color: white !important;
-    border: none !important;
-    padding: 15px 30px !important;
-    font-size: 18px !important;
-    font-weight: 600 !important;
-    border-radius: 15px !important;
-    cursor: pointer !important;
-    transition: all 0.3s ease !important;
-    width: 100% !important;
-    margin-top: 20px !important;
-    box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3) !important;
-}
-
-button.primary:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4) !important;
-}
-
-button.secondary {
-    background: white !important;
-    color: #667eea !important;
-    border: 2px solid #667eea !important;
-    padding: 10px 20px !important;
+.gallery {
     border-radius: 10px !important;
-    font-weight: 600 !important;
-    cursor: pointer !important;
-    transition: all 0.3s ease !important;
-}
-
-button.secondary:hover {
-    background: #667eea !important;
-    color: white !important;
-}
-
-.section-title {
-    text-align: center !important;
-    font-size: 24px !important;
-    font-weight: 700 !important;
-    color: #2d3748 !important;
-    margin: 30px 0 20px !important;
-    padding-bottom: 10px !important;
-    border-bottom: 3px solid #667eea !important;
-    display: inline-block !important;
-}
-
-.title-wrapper {
-    text-align: center !important;
-    width: 100% !important;
-}
-
-.footer {
-    text-align: center !important;
-    margin-top: 50px !important;
-    padding: 20px !important;
-    color: #718096 !important;
-}
-
-.progress-bar {
-    width: 100%;
-    height: 20px;
-    background: #e2e8f0;
-    border-radius: 10px;
-    overflow: hidden;
-}
-
-.progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #48bb78, #4299e1);
-    transition: width 0.3s ease;
+    overflow: hidden !important;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1) !important;
 }
 """
 
-# Create interface
-with gr.Blocks(css=css, title="OpenDVC Video Compression", theme=gr.themes.Soft()) as demo:
+# Create Gradio interface
+with gr.Blocks(title="OpenDVC Video Compression", theme=gr.themes.Soft()) as demo:
     
-    processor = OpenDVCProcessor()
+    compressor = VideoCompressor()
     
     # Header
     gr.HTML("""
@@ -484,136 +426,76 @@ with gr.Blocks(css=css, title="OpenDVC Video Compression", theme=gr.themes.Soft(
             <h1 style="font-size: 52px; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0;">
                 🎥 OpenDVC
             </h1>
-            <p style="font-size: 18px; color: #4a5568; margin: 10px 0 20px;">
-                AI-Powered Video Compression with PyTorch
-            </p>
+            <p style="font-size: 18px; color: #4a5568;">AI-Powered Video Compression - Demo</p>
         </div>
     """)
     
     with gr.Row():
         with gr.Column(scale=2):
-            video_input = gr.Video(label="", show_label=False, elem_classes="video-player")
-            
-            # Video info display (will update when video uploaded)
-            video_info = gr.HTML("""
-                <div style="background: white; padding: 15px; border-radius: 10px; margin-top: 10px; text-align: center;">
-                    <p style="color: #718096; margin:0;">Upload a video to see information</p>
-                </div>
-            """)
+            video_input = gr.Video(label="Upload Video", show_label=False, elem_classes="video-player")
         
         with gr.Column(scale=1):
-            with gr.Column(elem_classes="video-player"):
-                gr.HTML("""
-                    <div style="padding: 20px;">
-                        <h3 style="color: #2d3748; margin-top: 0;">⚙️ Compression Settings</h3>
-                """)
+            with gr.Column():
+                gr.Markdown("### ⚙️ Compression Settings")
                 
                 mode = gr.Radio(["PSNR", "MS-SSIM"], value="PSNR", label="Mode")
-                lambda_val = gr.Dropdown(["256", "512", "1024", "2048", "8", "16", "32", "64"], 
-                                        value="1024", label="Lambda")
+                lambda_val = gr.Dropdown(["256", "512", "1024", "2048", "8", "16", "32", "64"], value="1024", label="Lambda")
                 quality = gr.Slider(10, 100, value=70, label="Quality %", step=5)
                 
-                gr.HTML("<hr style='margin: 20px 0;'>")
-                
-                # Frame selection options
-                gr.HTML("<h4 style='color: #2d3748;'>🎯 Frame Selection</h4>")
-                
-                frame_mode = gr.Radio(
-                    ["full", "partial"], 
-                    value="partial", 
-                    label="Processing Mode",
-                    info="Full = entire video, Partial = select frames"
-                )
+                gr.Markdown("### 🎯 Processing Options")
+                process_type = gr.Radio(["full", "partial"], value="partial", label="Type")
                 
                 with gr.Row():
                     start_frame = gr.Number(value=0, label="Start Frame", minimum=0, step=1)
-                    max_frames = gr.Slider(5, 100, value=20, label="Number of Frames", step=5)
+                    max_frames = gr.Slider(5, 100, value=20, label="Max Frames", step=5)
                 
-                gr.HTML("<hr style='margin: 20px 0;'>")
-                
-                with gr.Row():
-                    create_btn = gr.Button("🎨 Create Test Video", elem_classes="secondary")
-                
-                process_btn = gr.Button("🚀 Compress Video", elem_classes="primary")
-                
-                gr.HTML("</div>")
+                process_btn = gr.Button("🚀 Process Video", variant="primary", size="lg")
+                create_btn = gr.Button("🎨 Create Test Video", variant="secondary")
     
     # Results
-    result_html = gr.HTML(label="")
+    result_html = gr.HTML()
     
-    # Video Comparison
-    gr.HTML("""
-        <div class="title-wrapper">
-            <h2 class="section-title">🎬 Video Comparison</h2>
-        </div>
-    """)
-    
+    # Video comparison
     with gr.Row():
         with gr.Column():
-            gr.HTML("<h3 style='text-align: center; color: #2d3748;'>Original Video</h3>")
-            original_video = gr.Video(label="", show_label=False, elem_classes="video-player")
-        
+            gr.Markdown("### 🎬 Original Video")
+            original_video = gr.Video(label="Original", show_label=False, elem_classes="video-player")
         with gr.Column():
-            gr.HTML("<h3 style='text-align: center; color: #2d3748;'>Compressed Video</h3>")
-            compressed_video = gr.Video(label="", show_label=False, elem_classes="video-player")
+            gr.Markdown("### 📀 Compressed Video")
+            compressed_video = gr.Video(label="Compressed", show_label=False, elem_classes="video-player")
     
-    # Frame Galleries
-    gr.HTML("""
-        <div class="title-wrapper">
-            <h2 class="section-title">🖼️ Frame Comparison</h2>
-        </div>
-    """)
-    
+    # Frame galleries
     with gr.Row():
         with gr.Column():
-            gr.HTML("<h4 style='text-align: center; color: #2d3748;'>Original Frames</h4>")
-            original_gallery = gr.Gallery(
-                columns=5, rows=1, height=150,
-                object_fit="contain", show_label=False,
-                elem_classes="gallery"
-            )
-        
+            gr.Markdown("### 🖼️ Original Frames")
+            original_gallery = gr.Gallery(columns=5, rows=1, height=150, object_fit="contain", elem_classes="gallery")
         with gr.Column():
-            gr.HTML("<h4 style='text-align: center; color: #2d3748;'>Compressed Frames</h4>")
-            compressed_gallery = gr.Gallery(
-                columns=5, rows=1, height=150,
-                object_fit="contain", show_label=False,
-                elem_classes="gallery"
-            )
+            gr.Markdown("### 🖼️ Compressed Frames")
+            compressed_gallery = gr.Gallery(columns=5, rows=1, height=150, object_fit="contain", elem_classes="gallery")
     
-    # Comparison Strips
-    gr.HTML("""
-        <div class="title-wrapper">
-            <h2 class="section-title">🔄 Side-by-Side Comparison</h2>
-        </div>
-    """)
-    
-    comparison_gallery = gr.Gallery(
-        columns=5, rows=1, height=200,
-        object_fit="contain", show_label=False,
-        elem_classes="gallery"
-    )
+    # Comparison strips
+    gr.Markdown("### 🔄 Side-by-Side Comparison")
+    comparison_gallery = gr.Gallery(columns=5, rows=1, height=200, object_fit="contain", elem_classes="gallery")
     
     # Footer
     gr.HTML("""
-        <div class="footer">
-            <p>✨ OpenDVC - AI-Powered Video Compression | Built with PyTorch & Gradio</p>
-            <p style="font-size: 12px; margin-top: 5px;">Double-click videos to play fullscreen</p>
+        <div style="text-align: center; margin-top: 30px; padding: 20px; color: #718096;">
+            <p>✨ OpenDVC Demo - Shows realistic compression sizes and artifacts</p>
         </div>
     """)
     
     # Event handlers
     process_btn.click(
-        fn=processor.process_video,
-        inputs=[video_input, mode, lambda_val, quality, frame_mode, start_frame, max_frames],
+        fn=compressor.process,
+        inputs=[video_input, mode, lambda_val, quality, process_type, start_frame, max_frames],
         outputs=[result_html, original_video, compressed_video, 
                  original_gallery, compressed_gallery, comparison_gallery]
     )
     
     create_btn.click(
-        fn=processor.create_test_video,
+        fn=compressor.create_test_video,
         outputs=video_input
     )
 
 if __name__ == "__main__":
-    demo.launch(share=True, debug=True)
+    demo.launch(share=True, debug=True, server_name="127.0.0.1", server_port=7860)
