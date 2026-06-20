@@ -1,0 +1,162 @@
+================================================================================
+                    ABVC - ENVIRONMENT SETUP
+================================================================================
+
+Follow these simple steps to set up the environment for ABVC.
+
+================================================================================
+STEP 1: INSTALL PYTHON 3.10
+================================================================================
+
+Windows: Download from https://www.python.org/downloads/
+         Check "Add Python to PATH" during installation
+
+Linux:   sudo apt install python3.10 python3.10-venv
+
+macOS:   brew install python@3.10
+
+Verify:
+python --version   # Should show Python 3.10.x
+
+
+================================================================================
+STEP 2: INSTALL CUDA 12.1 (For GPU)
+================================================================================
+
+Check your GPU:
+nvidia-smi
+
+Download CUDA 12.1 from:
+https://developer.nvidia.com/cuda-12-1-0-download-archive
+
+Download cuDNN 8.9 from (requires free registration):
+https://developer.nvidia.com/cudnn
+
+Verify:
+nvcc --version
+
+
+================================================================================
+STEP 3: INSTALL FFMPEG
+================================================================================
+
+Windows (PowerShell as Admin):
+choco install ffmpeg
+OR
+winget install ffmpeg
+
+Linux (Ubuntu/Debian):
+sudo apt install ffmpeg
+
+Linux (Fedora/CentOS):
+sudo dnf install ffmpeg
+
+macOS:
+brew install ffmpeg
+
+Verify:
+ffmpeg -version
+
+
+================================================================================
+STEP 4: CREATE VIRTUAL ENVIRONMENT
+================================================================================
+
+Windows (PowerShell):
+python -m venv .venv
+.\.venv\Scripts\Activate
+
+Windows (Command Prompt):
+python -m venv .venv
+.venv\Scripts\activate
+
+Linux/macOS:
+python -m venv .venv
+source .venv/bin/activate
+
+If PowerShell gives an execution error:
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+
+================================================================================
+STEP 5: INSTALL PYTORCH AND LIBRARIES
+================================================================================
+
+With the virtual environment activated, run:
+
+# For CUDA 12.1 (GPU):
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# For CPU only (no GPU):
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Install all other dependencies:
+pip install numpy==1.24.4 opencv-python==4.8.1.78 pillow==10.1.0 tqdm==4.66.1 matplotlib==3.8.0 scipy==1.11.3 tensorboard==2.14.0
+
+
+================================================================================
+STEP 6: VERIFY INSTALLATION
+================================================================================
+
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA Available: {torch.cuda.is_available()}')"
+
+python -c "import cv2; print(f'OpenCV: {cv2.__version__}')"
+
+ffmpeg -version
+
+
+================================================================================
+COMMON ISSUES & SOLUTIONS
+================================================================================
+
+| Issue                          | Solution                                                       |
+|--------------------------------|----------------------------------------------------------------|
+| CUDA not available             | Check NVIDIA driver and CUDA 12.1 installation                 |
+| torchvision not found          | pip install torchvision --index-url https://download.pytorch.org/whl/cu121 |
+| cv2 not found                  | pip install opencv-python                                      |
+| FFmpeg not found               | Add FFmpeg to system PATH, restart terminal                    |
+| CUDA out of memory             | Reduce batch size or process fewer frames                      |
+| Pillow _imaging error          | pip uninstall Pillow -y && pip install --no-cache-dir Pillow   |
+| orjson import error            | pip uninstall orjson -y && pip install --no-cache-dir orjson   |
+
+
+================================================================================
+QUICK SETUP (ALL IN ONE)
+================================================================================
+
+Windows PowerShell:
+-------------------------------------------------------------------------------
+python -m venv .venv
+.\.venv\Scripts\Activate
+pip install --upgrade pip
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install numpy opencv-python pillow tqdm matplotlib scipy tensorboard
+echo "Setup complete!"
+
+Linux/macOS:
+-------------------------------------------------------------------------------
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install numpy opencv-python pillow tqdm matplotlib scipy tensorboard
+echo "Setup complete!"
+
+
+================================================================================
+FULL SETUP CHECKLIST
+================================================================================
+
+[ ] Python 3.10+ installed
+[ ] CUDA 12.1 and cuDNN 8.9 installed (for GPU)
+[ ] NVIDIA driver installed (for GPU)
+[ ] FFmpeg installed and in PATH
+[ ] Virtual environment created and activated
+[ ] PyTorch with CUDA 12.1 installed
+[ ] All required libraries installed
+[ ] Verification commands passed
+
+
+================================================================================
+                            READY TO USE!
+================================================================================
